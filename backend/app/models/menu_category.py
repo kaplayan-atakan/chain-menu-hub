@@ -11,7 +11,7 @@ class MenuCategoryBase(BaseModel):
 
 
 class MenuCategoryCreate(MenuCategoryBase):
-    branch_id: UUID
+    brand_id: UUID
 
 
 class MenuCategoryUpdate(BaseModel):
@@ -24,7 +24,7 @@ class MenuCategoryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    branch_id: UUID
+    brand_id: UUID
     name: str
     sort_order: int
     is_active: bool

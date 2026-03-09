@@ -6,13 +6,19 @@ import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/cn";
 import {
   LayoutDashboard,
+  Tags,
+  Building2,
   UtensilsCrossed,
+  Users,
   LogOut,
 } from "lucide-react";
 
 const NAV_ITEMS = [
   { href: "/dashboard", label: "Panel", icon: LayoutDashboard },
+  { href: "/dashboard/brands", label: "Markalar", icon: Tags },
+  { href: "/dashboard/branches", label: "Şubeler", icon: Building2 },
   { href: "/dashboard/menus", label: "Menü Yönetimi", icon: UtensilsCrossed },
+  { href: "/dashboard/users", label: "Kullanıcı Yetkileri", icon: Users },
 ];
 
 export default function PanelLayout({
@@ -83,7 +89,10 @@ export default function PanelLayout({
 
         <nav className="flex flex-1 flex-col gap-1 p-3">
           {NAV_ITEMS.map(({ href, label, icon: Icon }) => {
-            const active = pathname === href;
+            const active =
+              href === "/dashboard"
+                ? pathname === href
+                : pathname.startsWith(href);
             return (
               <a
                 key={href}

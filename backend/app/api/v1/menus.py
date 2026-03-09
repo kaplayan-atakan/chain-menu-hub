@@ -2,7 +2,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, status
 
-from app.api.deps import get_current_user
+from app.api.deps import get_current_admin, get_current_user
+from app.models.branch_item_override import (
+    BranchItemOverrideCreate,
+    BranchItemOverrideResponse,
+    BranchItemOverrideUpdate,
+)
 from app.models.menu_category import (
     MenuCategoryCreate,
     MenuCategoryResponse,
@@ -20,6 +25,15 @@ router = APIRouter(prefix="/menus", tags=["menus"])
 # ──────────────────────────────────────────────
 
 
+def _assert_admin(user: UserContext) -> None:
+    """Master menü (kategori/ürün) CRUD yalnızca Admin'e açıktır."""
+    if user.role != UserRole.admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required for master menu operations.",
+        )
+
+
 def _assert_branch_access(user: UserContext, branch_id: UUID) -> None:
     """
     Admin → her şubeye erişebilir.
@@ -34,23 +48,6 @@ def _assert_branch_access(user: UserContext, branch_id: UUID) -> None:
         )
 
 
-async def _assert_category_branch_access(
-    user: UserContext, category_id: UUID
-) -> UUID:
-    """Kategori'nin bağlı olduğu branch_id'yi çözer ve erişim kontrolü yapar."""
-    category = await menu_service.get_category(category_id)
-    _assert_branch_access(user, category.branch_id)
-    return category.branch_id
-
-
-async def _assert_item_branch_access(user: UserContext, item_id: UUID) -> None:
-    """Ürünün bağlı olduğu branch'e erişim kontrolü yapar."""
-    branch_id = await menu_service._resolve_branch_id_from_category(
-        (await menu_service.get_item(item_id)).category_id
-    )
-    _assert_branch_access(user, branch_id)
-
-
 # ──────────────────────────────────────────────
 # Public endpoint — auth gerektirmez
 # ──────────────────────────────────────────────
@@ -60,6 +57,7 @@ async def _assert_item_branch_access(user: UserContext, item_id: UUID) -> None:
 async def get_public_menu(branch_id: UUID) -> dict:
     """
     QR menü: Müşteriye sunulan salt okunur menü.
+    Master menü + şube override birleşimi.
     Cache-first: önce Redis, yoksa DB → Redis (TTL 24h).
     Auth gerektirmez.
     """
@@ -67,21 +65,20 @@ async def get_public_menu(branch_id: UUID) -> dict:
 
 
 # ──────────────────────────────────────────────
-# Categories — authenticated CRUD
+# Categories — Admin-only master menü CRUD
 # ──────────────────────────────────────────────
 
 
 @router.get(
-    "/categories/{branch_id}",
+    "/categories/{brand_id}",
     response_model=list[MenuCategoryResponse],
 )
 async def list_categories(
-    branch_id: UUID,
+    brand_id: UUID,
     user: UserContext = Depends(get_current_user),
 ) -> list[MenuCategoryResponse]:
-    """Bir şubenin kategorilerini listeler."""
-    _assert_branch_access(user, branch_id)
-    return await menu_service.list_categories(branch_id)
+    """Bir markanın master menü kategorilerini listeler."""
+    return await menu_service.list_categories(brand_id)
 
 
 @router.post(
@@ -93,8 +90,8 @@ async def create_category(
     payload: MenuCategoryCreate,
     user: UserContext = Depends(get_current_user),
 ) -> MenuCategoryResponse:
-    """Yeni kategori oluşturur. Yazma işlemi → cache invalidation tetiklenir."""
-    _assert_branch_access(user, payload.branch_id)
+    """Yeni kategori oluşturur (Admin only). Tüm şubelerin cache'ini invalidate eder."""
+    _assert_admin(user)
     return await menu_service.create_category(payload)
 
 
@@ -107,8 +104,8 @@ async def update_category(
     payload: MenuCategoryUpdate,
     user: UserContext = Depends(get_current_user),
 ) -> MenuCategoryResponse:
-    """Kategoriyi günceller. Yazma işlemi → cache invalidation tetiklenir."""
-    await _assert_category_branch_access(user, category_id)
+    """Kategoriyi günceller (Admin only). Cache invalidation tetiklenir."""
+    _assert_admin(user)
     return await menu_service.update_category(category_id, payload)
 
 
@@ -120,13 +117,13 @@ async def delete_category(
     category_id: UUID,
     user: UserContext = Depends(get_current_user),
 ) -> None:
-    """Kategoriyi soft-delete yapar. Cache invalidation tetiklenir."""
-    await _assert_category_branch_access(user, category_id)
+    """Kategoriyi soft-delete yapar (Admin only). Cache invalidation tetiklenir."""
+    _assert_admin(user)
     await menu_service.delete_category(category_id)
 
 
 # ──────────────────────────────────────────────
-# Items — authenticated CRUD
+# Items — Admin-only master menü CRUD
 # ──────────────────────────────────────────────
 
 
@@ -139,7 +136,6 @@ async def list_items(
     user: UserContext = Depends(get_current_user),
 ) -> list[MenuItemResponse]:
     """Bir kategorinin ürünlerini listeler."""
-    await _assert_category_branch_access(user, category_id)
     return await menu_service.list_items(category_id)
 
 
@@ -152,9 +148,8 @@ async def create_item(
     payload: MenuItemCreate,
     user: UserContext = Depends(get_current_user),
 ) -> MenuItemResponse:
-    """Yeni ürün oluşturur. Yazma işlemi → cache invalidation tetiklenir."""
-    branch_id = await menu_service._resolve_branch_id_from_category(payload.category_id)
-    _assert_branch_access(user, branch_id)
+    """Yeni ürün oluşturur (Admin only). Cache invalidation tetiklenir."""
+    _assert_admin(user)
     return await menu_service.create_item(payload)
 
 
@@ -167,8 +162,8 @@ async def update_item(
     payload: MenuItemUpdate,
     user: UserContext = Depends(get_current_user),
 ) -> MenuItemResponse:
-    """Ürünü günceller. Yazma işlemi → cache invalidation tetiklenir."""
-    await _assert_item_branch_access(user, item_id)
+    """Ürünü günceller (Admin only). Cache invalidation tetiklenir."""
+    _assert_admin(user)
     return await menu_service.update_item(item_id, payload)
 
 
@@ -180,6 +175,53 @@ async def delete_item(
     item_id: UUID,
     user: UserContext = Depends(get_current_user),
 ) -> None:
-    """Ürünü soft-delete yapar. Cache invalidation tetiklenir."""
-    await _assert_item_branch_access(user, item_id)
+    """Ürünü soft-delete yapar (Admin only). Cache invalidation tetiklenir."""
+    _assert_admin(user)
     await menu_service.delete_item(item_id)
+
+
+# ──────────────────────────────────────────────
+# Branch Item Overrides — şube bazlı fiyat/gizleme
+# ──────────────────────────────────────────────
+
+
+@router.get(
+    "/overrides/{branch_id}",
+    response_model=list[BranchItemOverrideResponse],
+)
+async def list_overrides(
+    branch_id: UUID,
+    user: UserContext = Depends(get_current_user),
+) -> list[BranchItemOverrideResponse]:
+    """Bir şubenin tüm override'larını listeler."""
+    _assert_branch_access(user, branch_id)
+    return await menu_service.list_overrides(branch_id)
+
+
+@router.post(
+    "/overrides",
+    response_model=BranchItemOverrideResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def upsert_override(
+    payload: BranchItemOverrideCreate,
+    user: UserContext = Depends(get_current_user),
+) -> BranchItemOverrideResponse:
+    """
+    Override oluşturur veya günceller (UPSERT).
+    Aynı (branch_id, menu_item_id) çifti varsa günceller.
+    """
+    _assert_branch_access(user, payload.branch_id)
+    return await menu_service.upsert_override(payload)
+
+
+@router.delete(
+    "/overrides/{override_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+async def delete_override(
+    override_id: UUID,
+    user: UserContext = Depends(get_current_user),
+) -> None:
+    """Override'ı siler (hard delete — varsayılan davranışa geri döner)."""
+    await menu_service.delete_override(override_id)

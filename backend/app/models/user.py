@@ -1,7 +1,8 @@
+from datetime import datetime
 from enum import Enum
 from uuid import UUID
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, EmailStr
 
 
 class UserRole(str, Enum):
@@ -18,3 +19,32 @@ class UserContext(BaseModel):
     id: UUID
     role: UserRole
     branch_ids: list[UUID]
+
+
+# ──────────────────────────────────────────────
+# User CRUD şemaları
+# ──────────────────────────────────────────────
+
+
+class UserCreate(BaseModel):
+    email: EmailStr
+    password: str
+    role: UserRole = UserRole.branch_official
+    branch_ids: list[UUID] = []
+
+
+class AssignedBranch(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    branch_id: UUID
+    branch_name: str
+
+
+class UserResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    email: str
+    role: UserRole
+    created_at: datetime
+    branches: list[AssignedBranch] = []

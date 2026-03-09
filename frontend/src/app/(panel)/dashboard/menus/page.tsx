@@ -8,7 +8,15 @@ import {
   type DropResult,
 } from "@hello-pangea/dnd";
 import { apiGet, apiPost, apiPatch, apiDelete, ApiError } from "@/lib/api";
-import type { Branch, MenuCategory, MenuItem, CategoryWithItems } from "@/types/api";
+import type {
+  Brand,
+  Branch,
+  MenuCategory,
+  MenuItem,
+  CategoryWithItems,
+  BranchItemOverride,
+  User,
+} from "@/types/api";
 import { GlassCard } from "@/components/ui/GlassCard";
 import { AccentButton } from "@/components/ui/AccentButton";
 import { cn } from "@/lib/cn";
@@ -22,7 +30,66 @@ import {
   X,
   Check,
   Store,
+  Tags,
+  Eye,
+  EyeOff,
 } from "lucide-react";
+
+// ─── Types ─────────────────────────────────────────────────
+
+/** Merged item for override view — master item + override state */
+interface OverrideItem extends MenuItem {
+  override_id: string | null;
+  custom_price: number | null;
+  is_hidden: boolean;
+}
+
+interface CategoryWithOverrideItems {
+  id: string;
+  name: string;
+  sort_order: number;
+  items: OverrideItem[];
+}
+
+// ─── Brand Selector ────────────────────────────────────────
+
+function BrandSelector({
+  brands,
+  selectedId,
+  onSelect,
+}: {
+  brands: Brand[];
+  selectedId: string | null;
+  onSelect: (id: string) => void;
+}) {
+  if (brands.length === 0) {
+    return (
+      <GlassCard className="text-center text-sm text-muted">
+        Henüz marka tanımlanmamış.
+      </GlassCard>
+    );
+  }
+
+  return (
+    <div className="flex flex-wrap gap-2">
+      {brands.map((b) => (
+        <button
+          key={b.id}
+          onClick={() => onSelect(b.id)}
+          className={cn(
+            "flex items-center gap-2 rounded-lg border px-3 py-2 text-sm transition-all",
+            selectedId === b.id
+              ? "border-accent bg-accent-muted text-accent"
+              : "border-border bg-surface text-muted hover:border-border-bright hover:text-foreground",
+          )}
+        >
+          <Tags size={14} />
+          {b.name}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 // ─── Branch Selector ───────────────────────────────────────
 
@@ -38,7 +105,7 @@ function BranchSelector({
   if (branches.length === 0) {
     return (
       <GlassCard className="text-center text-sm text-muted">
-        Henüz şube tanımlanmamış.
+        Atanmış şubeniz yok.
       </GlassCard>
     );
   }
@@ -107,7 +174,7 @@ function InlineInput({
   );
 }
 
-// ─── Category Card ─────────────────────────────────────────
+// ─── Category Card (Admin: Master Menu CRUD) ───────────────
 
 function CategoryCard({
   category,
@@ -220,7 +287,7 @@ function CategoryCard({
   );
 }
 
-// ─── Item Row ──────────────────────────────────────────────
+// ─── Item Row (Admin: Master menu editing) ─────────────────
 
 function ItemRow({
   item,
@@ -234,7 +301,7 @@ function ItemRow({
   const [editingField, setEditingField] = useState<"name" | "price" | null>(null);
 
   return (
-    <div className="flex items-center gap-3 rounded-lg px-2 py-1.5 transition-colors hover:bg-surface-hover">
+    <div className="ml-4 flex items-center gap-3 rounded-lg border-l-4 border-accent/20 px-3 py-1.5 transition-colors hover:bg-surface-hover">
       <div className="flex-1 min-w-0">
         {editingField === "name" ? (
           <InlineInput
@@ -292,6 +359,160 @@ function ItemRow({
   );
 }
 
+// ─── Override Category Card (Branch Official) ──────────────
+
+function OverrideCategoryCard({
+  category,
+  onToggleHidden,
+  onSetCustomPrice,
+  onClearOverride,
+}: {
+  category: CategoryWithOverrideItems;
+  onToggleHidden: (item: OverrideItem) => void;
+  onSetCustomPrice: (item: OverrideItem, price: number | null) => void;
+  onClearOverride: (item: OverrideItem) => void;
+}) {
+  const [expanded, setExpanded] = useState(true);
+  const visibleCount = category.items.filter((i) => !i.is_hidden).length;
+
+  return (
+    <div className="rounded-xl border border-glass-border bg-glass-bg backdrop-blur-md">
+      {/* Category Header */}
+      <div className="flex items-center gap-2 px-4 py-3">
+        <button
+          onClick={() => setExpanded(!expanded)}
+          className="text-muted hover:text-foreground"
+        >
+          {expanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+        </button>
+
+        <span className="flex-1 text-sm font-semibold text-foreground">
+          {category.name}
+        </span>
+
+        <span className="text-xs text-muted">
+          {visibleCount}/{category.items.length} görünür
+        </span>
+      </div>
+
+      {/* Override Items */}
+      {expanded && (
+        <div className="border-t border-border px-4 py-2 space-y-1">
+          {category.items.map((item) => (
+            <OverrideItemRow
+              key={item.id}
+              item={item}
+              onToggleHidden={onToggleHidden}
+              onSetCustomPrice={onSetCustomPrice}
+              onClearOverride={onClearOverride}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Override Item Row ─────────────────────────────────────
+
+function OverrideItemRow({
+  item,
+  onToggleHidden,
+  onSetCustomPrice,
+  onClearOverride,
+}: {
+  item: OverrideItem;
+  onToggleHidden: (item: OverrideItem) => void;
+  onSetCustomPrice: (item: OverrideItem, price: number | null) => void;
+  onClearOverride: (item: OverrideItem) => void;
+}) {
+  const [editingPrice, setEditingPrice] = useState(false);
+  const hasOverride = item.override_id !== null;
+  const displayPrice = item.custom_price ?? item.price;
+
+  return (
+    <div
+      className={cn(
+        "ml-4 flex items-center gap-3 rounded-lg border-l-4 px-3 py-2 transition-colors",
+        item.is_hidden
+          ? "border-danger/40 bg-danger/5 opacity-60"
+          : hasOverride
+            ? "border-accent/60 bg-accent/5"
+            : "border-border/40 hover:bg-surface-hover",
+      )}
+    >
+      {/* Visibility toggle */}
+      <button
+        onClick={() => onToggleHidden(item)}
+        className={cn(
+          "shrink-0",
+          item.is_hidden ? "text-danger" : "text-success",
+        )}
+        title={item.is_hidden ? "Göster" : "Gizle"}
+      >
+        {item.is_hidden ? <EyeOff size={16} /> : <Eye size={16} />}
+      </button>
+
+      {/* Item name */}
+      <div className="flex-1 min-w-0">
+        <span className={cn("text-sm", item.is_hidden ? "line-through text-muted" : "text-foreground")}>
+          {item.name}
+        </span>
+        {item.description && (
+          <p className="truncate text-xs text-muted">{item.description}</p>
+        )}
+      </div>
+
+      {/* Master price (if override exists, show it dimmed) */}
+      {item.custom_price !== null && (
+        <span className="text-xs text-muted line-through">
+          ₺{Number(item.price).toFixed(2)}
+        </span>
+      )}
+
+      {/* Effective price (editable) */}
+      <div className="shrink-0">
+        {editingPrice ? (
+          <InlineInput
+            value={String(displayPrice)}
+            type="number"
+            onSave={(val) => {
+              const num = parseFloat(val);
+              if (!isNaN(num) && num >= 0) {
+                onSetCustomPrice(item, num === item.price ? null : num);
+              }
+              setEditingPrice(false);
+            }}
+            onCancel={() => setEditingPrice(false)}
+            placeholder="Fiyat"
+          />
+        ) : (
+          <button
+            onClick={() => setEditingPrice(true)}
+            className={cn(
+              "text-sm font-medium hover:brightness-125",
+              item.custom_price !== null ? "text-accent" : "text-foreground",
+            )}
+          >
+            ₺{Number(displayPrice).toFixed(2)}
+          </button>
+        )}
+      </div>
+
+      {/* Clear override button */}
+      {hasOverride && (
+        <button
+          onClick={() => onClearOverride(item)}
+          className="shrink-0 text-xs text-muted hover:text-danger"
+          title="Override&apos;ı kaldır"
+        >
+          <X size={13} />
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ─── Live Preview (Phone Frame) ────────────────────────────
 
 function LivePreview({ categories }: { categories: CategoryWithItems[] }) {
@@ -302,11 +523,8 @@ function LivePreview({ categories }: { categories: CategoryWithItems[] }) {
       <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted">
         Canlı Önizleme
       </p>
-      {/* Phone Frame */}
       <div className="relative w-[300px] rounded-[2rem] border-2 border-border-bright bg-background p-2 shadow-[0_0_60px_rgba(0,0,0,0.5)]">
-        {/* Notch */}
         <div className="mx-auto mb-2 h-5 w-24 rounded-full bg-surface" />
-        {/* Screen */}
         <div className="h-[520px] overflow-y-auto rounded-2xl bg-surface p-4">
           {activeCategories.length === 0 ? (
             <p className="mt-20 text-center text-sm text-muted">
@@ -349,78 +567,191 @@ function LivePreview({ categories }: { categories: CategoryWithItems[] }) {
   );
 }
 
+/** Preview for override view — shows merged result */
+function OverridePreview({ categories }: { categories: CategoryWithOverrideItems[] }) {
+  return (
+    <div className="flex flex-col items-center">
+      <p className="mb-3 text-xs font-medium uppercase tracking-wider text-muted">
+        Şube Önizleme
+      </p>
+      <div className="relative w-[300px] rounded-[2rem] border-2 border-border-bright bg-background p-2 shadow-[0_0_60px_rgba(0,0,0,0.5)]">
+        <div className="mx-auto mb-2 h-5 w-24 rounded-full bg-surface" />
+        <div className="h-[520px] overflow-y-auto rounded-2xl bg-surface p-4">
+          {categories.length === 0 ? (
+            <p className="mt-20 text-center text-sm text-muted">
+              Menü boş.
+            </p>
+          ) : (
+            categories.map((cat) => {
+              const visibleItems = cat.items.filter((i) => !i.is_hidden);
+              if (visibleItems.length === 0) return null;
+              return (
+                <div key={cat.id} className="mb-5">
+                  <h3 className="mb-2 border-b border-border pb-1 text-sm font-bold text-accent">
+                    {cat.name}
+                  </h3>
+                  {visibleItems.map((item) => (
+                    <div
+                      key={item.id}
+                      className="flex items-start justify-between py-1.5"
+                    >
+                      <div className="flex-1 min-w-0 pr-2">
+                        <p className="text-xs font-medium text-foreground">
+                          {item.name}
+                        </p>
+                        {item.description && (
+                          <p className="truncate text-[10px] text-muted">
+                            {item.description}
+                          </p>
+                        )}
+                      </div>
+                      <span className="shrink-0 text-xs font-semibold text-accent">
+                        ₺{Number(item.custom_price ?? item.price).toFixed(2)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Main Page ─────────────────────────────────────────────
 
 export default function MenuManagementPage() {
+  const [userRole, setUserRole] = useState<"admin" | "branch_official" | null>(null);
+  const [userBranchIds, setUserBranchIds] = useState<string[]>([]);
+
+  // Admin state
+  const [brands, setBrands] = useState<Brand[]>([]);
+  const [selectedBrandId, setSelectedBrandId] = useState<string | null>(null);
+  const [categories, setCategories] = useState<CategoryWithItems[]>([]);
+
+  // Branch official state
   const [branches, setBranches] = useState<Branch[]>([]);
   const [selectedBranchId, setSelectedBranchId] = useState<string | null>(null);
-  const [categories, setCategories] = useState<CategoryWithItems[]>([]);
+  const [overrideCategories, setOverrideCategories] = useState<CategoryWithOverrideItems[]>([]);
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // ── Load branches on mount ──
+  // ── Load user profile on mount ──
   useEffect(() => {
-    async function loadBranches() {
+    async function init() {
       try {
-        const data = await apiGet<Branch[]>("/api/v1/branches");
-        setBranches(data);
-        if (data.length > 0) {
-          setSelectedBranchId(data[0].id);
+        const me = await apiGet<User>("/api/v1/users/me");
+        setUserRole(me.role);
+
+        if (me.role === "admin") {
+          const brandData = await apiGet<Brand[]>("/api/v1/brands");
+          setBrands(brandData);
+          if (brandData.length > 0) setSelectedBrandId(brandData[0].id);
+        } else {
+          // Branch official — load their assigned branches
+          const branchIds = me.branches.map((b) => b.branch_id);
+          setUserBranchIds(branchIds);
+          const allBranches = await apiGet<Branch[]>("/api/v1/branches");
+          const myBranches = allBranches.filter((b) => branchIds.includes(b.id));
+          setBranches(myBranches);
+          if (myBranches.length > 0) setSelectedBranchId(myBranches[0].id);
         }
       } catch (err) {
-        setError(err instanceof ApiError ? err.detail : "Şubeler yüklenemedi");
+        setError(err instanceof ApiError ? err.detail : "Kullanıcı bilgileri yüklenemedi");
       } finally {
         setLoading(false);
       }
     }
-    loadBranches();
+    init();
   }, []);
 
-  // ── Load categories + items when branch changes ──
-  const loadMenu = useCallback(async (branchId: string) => {
+  // ── Admin: Load master menu when brand changes ──
+  const loadMasterMenu = useCallback(async (brandId: string) => {
     try {
-      const cats = await apiGet<MenuCategory[]>(
-        `/api/v1/menus/categories/${branchId}`,
-      );
-
-      // Her kategori için ürünleri çek
+      const cats = await apiGet<MenuCategory[]>(`/api/v1/menus/categories/${brandId}`);
       const catsWithItems: CategoryWithItems[] = await Promise.all(
         cats.map(async (cat) => {
-          const items = await apiGet<MenuItem[]>(
-            `/api/v1/menus/items/${cat.id}`,
-          );
+          const items = await apiGet<MenuItem[]>(`/api/v1/menus/items/${cat.id}`);
           return { ...cat, items };
         }),
       );
-
-      // sort_order'a göre sırala
       catsWithItems.sort((a, b) => a.sort_order - b.sort_order);
       setCategories(catsWithItems);
       setError(null);
     } catch (err) {
-      if (err instanceof ApiError) {
-        setError(err.detail);
-      } else {
-        setError("Menü yüklenemedi");
-      }
+      setError(err instanceof ApiError ? err.detail : "Menü yüklenemedi");
     }
   }, []);
 
   useEffect(() => {
-    if (selectedBranchId) {
-      loadMenu(selectedBranchId);
+    if (userRole === "admin" && selectedBrandId) {
+      loadMasterMenu(selectedBrandId);
     }
-  }, [selectedBranchId, loadMenu]);
+  }, [userRole, selectedBrandId, loadMasterMenu]);
 
-  // ── Category CRUD ──
+  // ── Branch official: Load master menu + overrides when branch changes ──
+  const loadOverrideMenu = useCallback(async (branchId: string) => {
+    try {
+      // Find the branch to get brand_id
+      const branch = branches.find((b) => b.id === branchId);
+      if (!branch) return;
+
+      // Fetch master menu for this brand
+      const cats = await apiGet<MenuCategory[]>(`/api/v1/menus/categories/${branch.brand_id}`);
+      const masterItems = await Promise.all(
+        cats.map(async (cat) => {
+          const items = await apiGet<MenuItem[]>(`/api/v1/menus/items/${cat.id}`);
+          return { catId: cat.id, catName: cat.name, sortOrder: cat.sort_order, items };
+        }),
+      );
+
+      // Fetch overrides for this branch
+      const overrides = await apiGet<BranchItemOverride[]>(`/api/v1/menus/overrides/${branchId}`);
+      const overrideMap = new Map(overrides.map((o) => [o.menu_item_id, o]));
+
+      // Merge
+      const merged: CategoryWithOverrideItems[] = masterItems
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((cat) => ({
+          id: cat.catId,
+          name: cat.catName,
+          sort_order: cat.sortOrder,
+          items: cat.items.map((item) => {
+            const ov = overrideMap.get(item.id);
+            return {
+              ...item,
+              override_id: ov?.id ?? null,
+              custom_price: ov?.custom_price ?? null,
+              is_hidden: ov?.is_hidden ?? false,
+            };
+          }),
+        }));
+
+      setOverrideCategories(merged);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : "Menü yüklenemedi");
+    }
+  }, [branches]);
+
+  useEffect(() => {
+    if (userRole === "branch_official" && selectedBranchId) {
+      loadOverrideMenu(selectedBranchId);
+    }
+  }, [userRole, selectedBranchId, loadOverrideMenu]);
+
+  // ── Admin: Category CRUD ──
 
   async function handleCreateCategory() {
-    if (!selectedBranchId) return;
+    if (!selectedBrandId) return;
     setSaving(true);
     try {
       const newCat = await apiPost<MenuCategory>("/api/v1/menus/categories", {
-        branch_id: selectedBranchId,
+        brand_id: selectedBrandId,
         name: "Yeni Kategori",
         sort_order: categories.length,
       });
@@ -466,7 +797,7 @@ export default function MenuManagementPage() {
     }
   }
 
-  // ── Item CRUD ──
+  // ── Admin: Item CRUD ──
 
   async function handleCreateItem(categoryId: string) {
     setSaving(true);
@@ -528,7 +859,7 @@ export default function MenuManagementPage() {
     }
   }
 
-  // ── Drag & Drop ──
+  // ── Admin: Drag & Drop ──
 
   async function handleDragEnd(result: DropResult) {
     if (!result.destination) return;
@@ -537,19 +868,16 @@ export default function MenuManagementPage() {
     const dstIdx = result.destination.index;
     if (srcIdx === dstIdx) return;
 
-    // Optimistic UI update
     const reordered = Array.from(categories);
     const [moved] = reordered.splice(srcIdx, 1);
     reordered.splice(dstIdx, 0, moved);
 
-    // Yeni sort_order değerlerini ata
     const updated = reordered.map((cat, idx) => ({
       ...cat,
       sort_order: idx,
     }));
     setCategories(updated);
 
-    // Backend'e gönder
     try {
       await Promise.all(
         updated
@@ -563,10 +891,60 @@ export default function MenuManagementPage() {
             }),
           ),
       );
-    } catch (err) {
-      // Rollback on failure
+    } catch {
       setError("Sıralama kaydedilemedi");
-      if (selectedBranchId) loadMenu(selectedBranchId);
+      if (selectedBrandId) loadMasterMenu(selectedBrandId);
+    }
+  }
+
+  // ── Branch official: Override handlers ──
+
+  async function handleToggleHidden(item: OverrideItem) {
+    if (!selectedBranchId) return;
+    setSaving(true);
+    try {
+      await apiPost<BranchItemOverride>("/api/v1/menus/overrides", {
+        branch_id: selectedBranchId,
+        menu_item_id: item.id,
+        custom_price: item.custom_price,
+        is_hidden: !item.is_hidden,
+      });
+      await loadOverrideMenu(selectedBranchId);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : "Override güncellenemedi");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleSetCustomPrice(item: OverrideItem, price: number | null) {
+    if (!selectedBranchId) return;
+    setSaving(true);
+    try {
+      await apiPost<BranchItemOverride>("/api/v1/menus/overrides", {
+        branch_id: selectedBranchId,
+        menu_item_id: item.id,
+        custom_price: price,
+        is_hidden: item.is_hidden,
+      });
+      await loadOverrideMenu(selectedBranchId);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : "Fiyat güncellenemedi");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleClearOverride(item: OverrideItem) {
+    if (!item.override_id) return;
+    setSaving(true);
+    try {
+      await apiDelete(`/api/v1/menus/overrides/${item.override_id}`);
+      if (selectedBranchId) await loadOverrideMenu(selectedBranchId);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.detail : "Override kaldırılamadı");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -581,17 +959,22 @@ export default function MenuManagementPage() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-bold text-foreground">Menü Yönetimi</h1>
-        {saving && (
-          <span className="text-xs text-muted animate-pulse">Kaydediliyor...</span>
-        )}
+        <div className="flex items-center gap-3">
+          {userRole === "admin" && (
+            <span className="rounded bg-accent-muted px-2 py-0.5 text-xs font-medium text-accent">
+              Admin — Master Menü
+            </span>
+          )}
+          {userRole === "branch_official" && (
+            <span className="rounded bg-surface px-2 py-0.5 text-xs font-medium text-muted">
+              Şube Yetkilisi — Override
+            </span>
+          )}
+          {saving && (
+            <span className="text-xs text-muted animate-pulse">Kaydediliyor...</span>
+          )}
+        </div>
       </div>
-
-      {/* Branch Selector */}
-      <BranchSelector
-        branches={branches}
-        selectedId={selectedBranchId}
-        onSelect={setSelectedBranchId}
-      />
 
       {error && (
         <div className="rounded-lg border border-danger/30 bg-danger/10 px-4 py-2 text-sm text-danger">
@@ -605,58 +988,123 @@ export default function MenuManagementPage() {
         </div>
       )}
 
-      {selectedBranchId && (
-        <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_380px]">
-          {/* ── Left: Management Panel (60%) ── */}
-          <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <h2 className="text-lg font-semibold text-foreground">
-                Kategoriler
-              </h2>
-              <AccentButton onClick={handleCreateCategory} disabled={saving}>
-                <Plus size={16} />
-                Kategori Ekle
-              </AccentButton>
-            </div>
+      {/* ═══════════════════════════════════════════ */}
+      {/* ADMIN VIEW: Brand selector + Master Menu   */}
+      {/* ═══════════════════════════════════════════ */}
+      {userRole === "admin" && (
+        <>
+          <BrandSelector
+            brands={brands}
+            selectedId={selectedBrandId}
+            onSelect={setSelectedBrandId}
+          />
 
-            <DragDropContext onDragEnd={handleDragEnd}>
-              <Droppable droppableId="categories">
-                {(provided) => (
-                  <div
-                    ref={provided.innerRef}
-                    {...provided.droppableProps}
-                    className="flex flex-col gap-3"
-                  >
-                    {categories.length === 0 && (
-                      <GlassCard className="text-center text-sm text-muted">
-                        Bu şubede henüz kategori yok. &quot;Kategori Ekle&quot;
-                        ile başlayın.
-                      </GlassCard>
+          {selectedBrandId && (
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_380px]">
+              {/* Left: Management Panel */}
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold text-foreground">
+                    Kategoriler
+                  </h2>
+                  <AccentButton onClick={handleCreateCategory} disabled={saving}>
+                    <Plus size={16} />
+                    Kategori Ekle
+                  </AccentButton>
+                </div>
+
+                <DragDropContext onDragEnd={handleDragEnd}>
+                  <Droppable droppableId="categories">
+                    {(provided) => (
+                      <div
+                        ref={provided.innerRef}
+                        {...provided.droppableProps}
+                        className="flex flex-col gap-3"
+                      >
+                        {categories.length === 0 && (
+                          <GlassCard className="text-center text-sm text-muted">
+                            Bu markada henüz kategori yok. &quot;Kategori Ekle&quot;
+                            ile başlayın.
+                          </GlassCard>
+                        )}
+                        {categories.map((cat, idx) => (
+                          <CategoryCard
+                            key={cat.id}
+                            category={cat}
+                            index={idx}
+                            onUpdate={handleUpdateCategory}
+                            onDelete={handleDeleteCategory}
+                            onItemUpdate={handleUpdateItem}
+                            onItemDelete={handleDeleteItem}
+                            onItemCreate={handleCreateItem}
+                          />
+                        ))}
+                        {provided.placeholder}
+                      </div>
                     )}
-                    {categories.map((cat, idx) => (
-                      <CategoryCard
-                        key={cat.id}
-                        category={cat}
-                        index={idx}
-                        onUpdate={handleUpdateCategory}
-                        onDelete={handleDeleteCategory}
-                        onItemUpdate={handleUpdateItem}
-                        onItemDelete={handleDeleteItem}
-                        onItemCreate={handleCreateItem}
-                      />
-                    ))}
-                    {provided.placeholder}
-                  </div>
-                )}
-              </Droppable>
-            </DragDropContext>
-          </div>
+                  </Droppable>
+                </DragDropContext>
+              </div>
 
-          {/* ── Right: Live Preview (40%) ── */}
-          <div className="sticky top-6 self-start">
-            <LivePreview categories={categories} />
-          </div>
-        </div>
+              {/* Right: Live Preview */}
+              <div className="sticky top-6 self-start">
+                <LivePreview categories={categories} />
+              </div>
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ═══════════════════════════════════════════ */}
+      {/* BRANCH OFFICIAL VIEW: Override Management  */}
+      {/* ═══════════════════════════════════════════ */}
+      {userRole === "branch_official" && (
+        <>
+          <BranchSelector
+            branches={branches}
+            selectedId={selectedBranchId}
+            onSelect={setSelectedBranchId}
+          />
+
+          {selectedBranchId && (
+            <div className="grid grid-cols-1 gap-6 xl:grid-cols-[1fr_380px]">
+              {/* Left: Override Panel */}
+              <div className="flex flex-col gap-4">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-lg font-semibold text-foreground">
+                    Şube Menü Ayarları
+                  </h2>
+                  <p className="text-xs text-muted">
+                    Fiyata tıklayarak özel fiyat belirleyin • Göz ikonu ile ürün gizleyin
+                  </p>
+                </div>
+
+                {overrideCategories.length === 0 && (
+                  <GlassCard className="text-center text-sm text-muted">
+                    Bu marka için henüz master menü oluşturulmamış.
+                  </GlassCard>
+                )}
+
+                <div className="flex flex-col gap-3">
+                  {overrideCategories.map((cat) => (
+                    <OverrideCategoryCard
+                      key={cat.id}
+                      category={cat}
+                      onToggleHidden={handleToggleHidden}
+                      onSetCustomPrice={handleSetCustomPrice}
+                      onClearOverride={handleClearOverride}
+                    />
+                  ))}
+                </div>
+              </div>
+
+              {/* Right: Override Preview */}
+              <div className="sticky top-6 self-start">
+                <OverridePreview categories={overrideCategories} />
+              </div>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
